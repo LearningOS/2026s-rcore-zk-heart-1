@@ -14,16 +14,15 @@ mod switch;
 #[allow(clippy::module_inception)]
 mod task;
 
-use crate::config::MAX_APP_NUM;
+use crate::config::{MAX_APP_NUM, MAX_SYSCALL_NUM};
 use crate::loader::{get_num_app, init_app_cx};
 use crate::sync::UPSafeCell;
+use crate::timer::get_time_ms;
 use lazy_static::*;
 use switch::__switch;
-pub use task::{TaskControlBlock, TaskStatus};
 
 pub use context::TaskContext;
-
-const MAX_SYSCALL_NUM: usize = 512;
+pub use task::{TaskControlBlock, TaskInfo, TaskStatus};
 
 /// The task manager, where all the tasks are managed.
 ///
@@ -57,6 +56,7 @@ lazy_static! {
             task_cx: TaskContext::zero_init(),
             task_status: TaskStatus::UnInit,
             syscall_times: [0; MAX_SYSCALL_NUM],
+            first_run_time: None,
         }; MAX_APP_NUM];
         for (i, task) in tasks.iter_mut().enumerate() {
             task.task_cx = TaskContext::goto_restore(init_app_cx(i));
@@ -83,10 +83,12 @@ impl TaskManager {
         let mut inner = self.inner.exclusive_access();
         let task0 = &mut inner.tasks[0];
         task0.task_status = TaskStatus::Running;
+        if task0.first_run_time.is_none() {
+            task0.first_run_time = Some(get_time_ms());
+        }
         let next_task_cx_ptr = &task0.task_cx as *const TaskContext;
         drop(inner);
         let mut _unused = TaskContext::zero_init();
-        // before this, we should drop local variables that must be dropped manually
         unsafe {
             __switch(&mut _unused as *mut TaskContext, next_task_cx_ptr);
         }
@@ -117,14 +119,16 @@ impl TaskManager {
         inner.tasks[current].syscall_times[syscall_id] += 1;
     }
 
-    /// Query the current task's syscall counter for the given syscall id.
-    fn current_syscall_times(&self, syscall_id: usize) -> usize {
-        if syscall_id >= MAX_SYSCALL_NUM {
-            return 0;
-        }
+    /// Get task information of the current running task.
+    fn get_current_task_info(&self) -> TaskInfo {
         let inner = self.inner.exclusive_access();
         let current = inner.current_task;
-        inner.tasks[current].syscall_times[syscall_id]
+        let task = &inner.tasks[current];
+        TaskInfo {
+            status: task.task_status,
+            syscall_times: task.syscall_times,
+            time: get_time_ms() - task.first_run_time.unwrap_or(0),
+        }
     }
 
     /// Find next task to run and return task id.
@@ -144,16 +148,17 @@ impl TaskManager {
         if let Some(next) = self.find_next_task() {
             let mut inner = self.inner.exclusive_access();
             let current = inner.current_task;
+            if inner.tasks[next].first_run_time.is_none() {
+                inner.tasks[next].first_run_time = Some(get_time_ms());
+            }
             inner.tasks[next].task_status = TaskStatus::Running;
             inner.current_task = next;
             let current_task_cx_ptr = &mut inner.tasks[current].task_cx as *mut TaskContext;
             let next_task_cx_ptr = &inner.tasks[next].task_cx as *const TaskContext;
             drop(inner);
-            // before this, we should drop local variables that must be dropped manually
             unsafe {
                 __switch(current_task_cx_ptr, next_task_cx_ptr);
             }
-            // go back to user mode
         } else {
             panic!("All applications completed!");
         }
@@ -166,7 +171,7 @@ pub fn run_first_task() {
 }
 
 /// Switch current `Running` task to the task we have found,
-/// or there is no `Ready` task and we can exit with all applications completed
+/// or there is no `Ready` task and we can exit with all applications completed.
 fn run_next_task() {
     TASK_MANAGER.run_next_task();
 }
@@ -185,8 +190,9 @@ pub(crate) fn record_current_syscall(syscall_id: usize) {
     TASK_MANAGER.record_current_syscall(syscall_id);
 }
 
-pub(crate) fn current_syscall_times(syscall_id: usize) -> usize {
-    TASK_MANAGER.current_syscall_times(syscall_id)
+/// Get information of the current running task.
+pub fn get_current_task_info() -> TaskInfo {
+    TASK_MANAGER.get_current_task_info()
 }
 
 /// Suspend the current 'Running' task and run the next task in task list.
