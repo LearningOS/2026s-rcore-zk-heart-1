@@ -131,6 +131,16 @@ impl TaskManager {
         }
     }
 
+    /// Get current task's syscall count for a specific syscall id.
+    fn get_current_syscall_count(&self, syscall_id: usize) -> Option<u32> {
+        if syscall_id >= MAX_SYSCALL_NUM {
+            return None;
+        }
+        let inner = self.inner.exclusive_access();
+        let current = inner.current_task;
+        Some(inner.tasks[current].syscall_times[syscall_id])
+    }
+
     /// Find next task to run and return task id.
     ///
     /// In this case, we only return the first `Ready` task in task list.
@@ -193,6 +203,11 @@ pub(crate) fn record_current_syscall(syscall_id: usize) {
 /// Get information of the current running task.
 pub fn get_current_task_info() -> TaskInfo {
     TASK_MANAGER.get_current_task_info()
+}
+
+/// Get current task's syscall count for syscall id.
+pub fn get_current_syscall_count(syscall_id: usize) -> Option<u32> {
+    TASK_MANAGER.get_current_syscall_count(syscall_id)
 }
 
 /// Suspend the current 'Running' task and run the next task in task list.

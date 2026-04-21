@@ -1,6 +1,6 @@
 //! Process management syscalls
 use crate::{
-    task::{exit_current_and_run_next, get_current_task_info, suspend_current_and_run_next, TaskInfo},
+    task::{exit_current_and_run_next, get_current_syscall_count, suspend_current_and_run_next},
     timer::get_time_us,
 };
 
@@ -38,14 +38,23 @@ pub fn sys_get_time(ts: *mut TimeVal, _tz: usize) -> isize {
     0
 }
 
-/// get current task info
-pub fn sys_task_info(ti: *mut TaskInfo) -> isize {
-    trace!("kernel: sys_task_info");
-    if ti.is_null() {
-        return -1;
+/// trace current task information
+///
+/// trace_request:
+/// - 0: read one byte from user virtual address `id` (`*const u8`)
+/// - 1: write one byte (`data as u8`) to user virtual address `id` (`*mut u8`)
+/// - 2: query current task syscall count for syscall id `id`
+pub fn sys_trace(trace_request: usize, id: usize, data: usize) -> isize {
+    trace!("kernel: sys_trace");
+    match trace_request {
+        0 => unsafe { *(id as *const u8) as isize },
+        1 => {
+            unsafe {
+                *(id as *mut u8) = data as u8;
+            }
+            0
+        }
+        2 => get_current_syscall_count(id).map_or(-1, |times| times as isize),
+        _ => -1,
     }
-    unsafe {
-        *ti = get_current_task_info();
-    }
-    0
 }
