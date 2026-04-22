@@ -216,7 +216,7 @@ pub fn suspend_current_and_run_next() {
     run_next_task();
 }
 
-/// Exit the current 'Running' task and run the next task in task list.
+/// Exit the current 'Running' task and run the next task in task list more.
 pub fn exit_current_and_run_next() {
     mark_current_exited();
     run_next_task();
