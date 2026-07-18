@@ -92,7 +92,7 @@ jobs:
           score_json=$(jq -n \
             --arg channel github \
             --argjson courseId ${{ secrets.RCORE_2026_SPRING_COURSE_ID }} \
-            --arg name Z-K-Heart \
+            --arg name ${{ github.actor }} \
             --argjson score $score \
             --argjson totalScore 500 \
             '{channel: $channel, courseId: $courseId, name: $name, score: $score, totalScore: $totalScore}')
