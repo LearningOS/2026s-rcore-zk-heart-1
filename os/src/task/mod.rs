@@ -14,6 +14,7 @@ mod switch;
 #[allow(clippy::module_inception)]
 mod task;
 
+use crate::config::MAX_SYSCALL_NUM;
 use crate::loader::{get_app_data, get_num_app};
 use crate::sync::UPSafeCell;
 use crate::trap::TrapContext;
@@ -153,6 +154,42 @@ impl TaskManager {
             panic!("All applications completed!");
         }
     }
+
+    ///这里实现syscall的计数
+    fn record_current_syscall(&self, syscall_id: usize) {
+        if syscall_id >= MAX_SYSCALL_NUM {
+            return;
+        }
+        let mut inner = self.inner.exclusive_access();
+        let current = inner.current_task;
+        inner.tasks[current].syscall_times[syscall_id] += 1;
+    }
+
+    /// Return the invocation count of the specified syscall for the current task.
+    fn get_current_syscall_count(&self, syscall_id: usize) -> Option<u32> {
+        if syscall_id >= MAX_SYSCALL_NUM {
+            return None;
+        }
+
+        let inner = self.inner.exclusive_access();
+        let current = inner.current_task;
+
+        Some(inner.tasks[current].syscall_times[syscall_id])
+    }
+
+    ///加入mmap操作
+    fn mmap_current(&self, start: usize, len: usize, prot: usize) -> isize {
+        let mut inner = self.inner.exclusive_access();
+        let current = inner.current_task;
+        inner.tasks[current].memory_set.mmap(start, len, prot)
+    }
+
+    ///加入munmap操作
+    fn munmap_current(&self, start: usize, len: usize) -> isize {
+        let mut inner = self.inner.exclusive_access();
+        let current = inner.current_task;
+        inner.tasks[current].memory_set.munmap(start, len)
+    }
 }
 
 /// Run the first task in task list.
@@ -201,4 +238,24 @@ pub fn current_trap_cx() -> &'static mut TrapContext {
 /// Change the current 'Running' task's program break
 pub fn change_program_brk(size: i32) -> Option<usize> {
     TASK_MANAGER.change_current_program_brk(size)
+}
+
+/// 记录当前任务对指定系统调用的一次调用。
+pub fn record_current_syscall(syscall_id: usize) {
+    TASK_MANAGER.record_current_syscall(syscall_id);
+}
+
+/// 获取当前任务对指定系统调用的累计调用次数。
+pub fn get_current_syscall_count(syscall_id: usize) -> Option<u32> {
+    TASK_MANAGER.get_current_syscall_count(syscall_id)
+}
+
+/// 在当前任务的用户地址空间中建立匿名内存映射。
+pub fn mmap_current(start: usize, len: usize, prot: usize) -> isize {
+    TASK_MANAGER.mmap_current(start, len, prot)
+}
+
+/// 取消当前任务用户地址空间中的指定内存映射。
+pub fn munmap_current(start: usize, len: usize) -> isize {
+    TASK_MANAGER.munmap_current(start, len)
 }

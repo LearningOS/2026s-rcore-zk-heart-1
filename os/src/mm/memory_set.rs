@@ -63,6 +63,120 @@ impl MemorySet {
             None,
         );
     }
+    ///实现映射
+    pub fn mmap(&mut self, start: usize, len: usize, prot: usize) -> isize {
+        //页对齐检查
+        if start % PAGE_SIZE != 0 {
+            return -1;
+        }
+        //检查prot权限位
+        if prot & !0x7 != 0 {
+            //除了低三位外还有赋值 属于错误
+            return -1;
+        }
+        if prot & 0x7 == 0 {
+            //低3位全0 无意义
+            return -1;
+        }
+        if len == 0 {
+            return 0;
+        }
+        //安全计算结束地址
+        let end = match start.checked_add(len) {
+            Some(end) => end,
+            None => return -1,
+        };
+
+        //把地址转换成虚拟地址和虚拟页号
+        let start_va = VirtAddr::from(start);
+        let end_va = VirtAddr::from(end);
+        let start_vpn = start_va.floor();
+        let end_vpn = end_va.ceil();
+
+        //检查目标页面是否已经映射
+        for vpn in VPNRange::new(start_vpn, end_vpn) {
+            if let Some(pte) = self.translate(vpn) {
+                if pte.is_valid() {
+                    //该页表项已经被映射了，就不用再mmap了
+                    return -1;
+                }
+            }
+        }
+
+        //把 prot 转换成 MapPermission,必须逐位转换
+        //U是必备的
+        let mut permission = MapPermission::U;
+        //readable
+        if prot & 0x1 != 0 {
+            permission |= MapPermission::R;
+        }
+        //wirtalbe
+        if prot & 0x2 != 0 {
+            permission |= MapPermission::W;
+        }
+        //executable
+        if prot & 0x4 != 0 {
+            permission |= MapPermission::X;
+        }
+
+        //真正分配物理页并建立映射
+        self.insert_framed_area(start_va, end_va, permission);
+
+        0
+    }
+
+    ///添加删除区域的方法
+    fn remove_area(&mut self, start_vpn: VirtPageNum, end_vpn: VirtPageNum) -> bool {
+        //找到对应区域
+        let area_index = self.areas.iter().position(|area| {
+            area.vpn_range.get_start() == start_vpn && area.vpn_range.get_end() == end_vpn
+        });
+        // If exists,remove and unmap it
+        if let Some(index) = area_index {
+            let mut area = self.areas.remove(index);
+            area.unmap(&mut self.page_table);
+            true
+        } else {
+            false
+        }
+    }
+
+    ///实现munmap
+    pub fn munmap(&mut self, start: usize, len: usize) -> isize {
+        if start % PAGE_SIZE != 0 {
+            return -1;
+        }
+        if len == 0 {
+            return 0;
+        }
+        //检查加法溢出
+        let end = match start.checked_add(len) {
+            Some(end) => end,
+            None => return -1,
+        };
+        //计算虚拟页范围
+        let start_va = VirtAddr::from(start);
+        let end_va = VirtAddr::from(end);
+        let start_vpn = start_va.floor();
+        let end_vpn = end_va.ceil();
+
+        //检查 all vpn 均已映射
+        for vpn in VPNRange::new(start_vpn, end_vpn) {
+            if let Some(pte) = self.translate(vpn) {
+                if !pte.is_valid() {
+                    return -1;
+                }
+            } else {
+                return -1;
+            }
+        }
+        //删除 MapArea
+        if !self.remove_area(start_vpn, end_vpn) {
+            return -1;
+        }
+        0
+    }
+
     fn push(&mut self, mut map_area: MapArea, data: Option<&[u8]>) {
         map_area.map(&mut self.page_table);
         if let Some(data) = data {
